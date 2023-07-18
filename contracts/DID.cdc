@@ -1,24 +1,33 @@
-import NonFungibleToken from "./standards/NonFungibleToken"
+// import NonFungibleToken from "standards/NonFungibleToken.cdc"
 
-pub contract DIDContract: NonFungibleToken {
+pub contract DIDContract {
 
-    pub var total: UInt64
+    pub var totalSupply: UInt64
 
     /// Storage and Public Paths
     pub let CollectionStoragePath: StoragePath
     pub let CollectionPublicPath: PublicPath
     pub let MinterStoragePath: StoragePath
 
+    /// The event that is emitted when an NFT is withdrawn from a Collection
+    pub event Withdraw(did: String, from: Address?)
+
+    /// The event that is emitted when an NFT is deposited to a Collection
+    pub event Deposit(did: String, to: Address?)
+
     /// The event that is emitted when the contract is created
     pub event ContractInitialized()
 
     pub resource DID {
         pub let id: String
-        pub let publicKey: String
+        pub let publicKey: PublicKey
 
         init(id: String, publicKey: String) {
             self.id = id
-            self.publicKey = publicKey
+            self.publicKey = PublicKey(
+                publicKey: publicKey.decodeHex(),
+                signatureAlgorithm: SignatureAlgorithm.BLS_BLS12_381
+            )
         }
     }
 
@@ -28,7 +37,7 @@ pub contract DIDContract: NonFungibleToken {
         init() {
             self.dids <- {}
         }
-        
+
         destroy () {
             destroy self.dids
         }
@@ -40,15 +49,9 @@ pub contract DIDContract: NonFungibleToken {
 
         let did <- create DID(id: id, publicKey: publicKey)
 
-        // Get or create the DIDCollection
-        let collection <- self.account(DIDContract.address)
-            .getCapability<&DIDCollection>(DIDCollection.CollectionPath)
-            .borrow()
-            ?? panic("Could not borrow capability to DIDCollection")
+        // collection.dids[id] = <-did
 
-        collection.dids[id] = <-did
-
-        self.getAccount(DIDContract.address)
+        getAccount(DIDContract.address)
             .getCapability<&DIDCollection>(DIDCollection.CollectionPath)
             .borrow<&DIDCollection.Collection{DIDCollection}>().save(<-collection)
 
@@ -56,27 +59,39 @@ pub contract DIDContract: NonFungibleToken {
     }
 
     pub fun getDID(id: String): @DID? {
-        let collection = self.getAccount(DIDContract.address)
-            .getCapability<&DIDCollection>(DIDCollection.CollectionPath)
+        let collection = getAccount(DIDContract.address)
+            .getCapability<&DIDCollection>(DIDCollection.CollectionPublicPath)
             .borrow()
             ?? panic("Could not borrow capability to DIDCollection")
 
         return collection.dids[id]
     }
 
-    pub fun verifySignature(didId: String, message: String, signature: String): Bool {
+    pub fun verifySignature(didId: String, message: [UInt8], signature: String): Bool {
         let did = self.getDID(didId)
 
         if let publicKey = did?.publicKey {
             // Verify the signature using the publicKey and signature
             // Implement the signature verification algorithm here
+            publicKey.verify(signature: signature, signedData: message, domainSeparationTag: domainSeparationTag, hashAlgorithm: HashAlgorithm.SHA2_256)
             return true // Return true if the signature is valid
         }
 
         return false // Return false if the DID doesn't exist
     }
 
-        pub resource DIDMinter {
+    // pub fun proof(_proof: [UInt8]): Bool {
+    //     let did = self.getDID(didId)
+
+    //     if let publicKey = did?.publicKey {
+    //         // Verify the signature using the publicKey and signature
+    //         // Implement the signature verification algorithm here
+    //         return publicKey.verifyProof(_proof)
+    //     }
+    //     return false // Return false if the DID doesn't exist
+    // }
+
+    pub resource DIDMinter {
 
         /// Mints a new DID with a new ID and deposit it in the
         /// recipients collection using their collection reference
@@ -85,6 +100,7 @@ pub contract DIDContract: NonFungibleToken {
 
         pub fun mintDID(
             recipient: &{NonFungibleToken.CollectionPublic},
+            publicKey: PublicKey
         ) {
             let metadata: {String: AnyStruct} = {}
             let currentBlock = getCurrentBlock()
@@ -107,7 +123,7 @@ pub contract DIDContract: NonFungibleToken {
 
     init() {
 
-        self.total = 0
+        self.totalSupply = 0
 
         // Set the named paths
         self.CollectionStoragePath = /storage/DIDCollection
@@ -121,7 +137,7 @@ pub contract DIDContract: NonFungibleToken {
         // create a public capability for the collection
         self.account.link<&DIDContract.DIDCollection{}>(
             self.CollectionPublicPath,
-            target: self.CollectionStoragePath
+            target: self.CollectionPublicPath
         )
 
         // Create a Minter resource and save it to storage
